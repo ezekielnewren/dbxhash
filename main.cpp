@@ -61,6 +61,8 @@ struct Locker {
     boost::unique_lock<boost::mutex>* lockGuard;
 
     Locker(shared_ptr<boost::mutex> _lock, shared_ptr<boost::condition_variable> _signal) {
+        assert(_lock != nullptr);
+        assert(_signal != nullptr);
         this->lock = _lock;
         this->signal = _signal;
         this->lockGuard = new boost::unique_lock<boost::mutex>(*lock);
@@ -100,6 +102,7 @@ struct Hasher {
 
     Hasher(uint32_t _threads) {
         lock = shared_ptr<boost::mutex>(new boost::mutex);
+        signal = shared_ptr<boost::condition_variable>(new boost::condition_variable());
 
         closed = false;
         eof = false;
