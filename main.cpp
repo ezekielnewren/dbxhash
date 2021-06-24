@@ -42,7 +42,7 @@ struct Hasher;
 enum st {
     st_free,
     st_alloc,
-    st_filled,
+    st_full,
     st_hashing,
     st_hashed,
 };
@@ -145,7 +145,7 @@ struct Hasher {
                     break;
                 while (true) {
                     for (int i=0; i<threads; i++) {
-                        Context* c = ring[(block_complete + i) % threads];
+                        Context* c = ring[(block_complete+i)%threads];
                         if (!(c != nullptr and c->state == st_hashed)) break;
                         count++;
                     }
@@ -162,7 +162,7 @@ struct Hasher {
 
                 for (int i=0; i<count; i++) {
                     Context* c = ring[(block_complete+i)%threads];
-                    assert((block_complete+i)%threads == c->block);
+                    assert(block_complete == c->block);
                     cout << c->block << " " << hexify(c->hash) << endl;
                     SHA256_Update(&sha256, c->hash, sizeof(c->hash));
                 }
@@ -170,7 +170,7 @@ struct Hasher {
                 for (int i=0; i<count; i++) {
                     Context* c = ring[(block_complete+i)%threads];
                     c->state = st_free;
-                    ring[(block_complete+i)%threads] = nullptr;
+                    ring[(c->block)%threads] = nullptr;
                 }
 
                 block_complete += count;
@@ -209,14 +209,13 @@ struct Hasher {
         return c;
     }
 
-    void submit(Context* ctx) {
+    void submit(Context* c) {
         Locker m(lock, signal);
-        assert(ctx->state == st_alloc);
-        ctx->state = st_filled;
-        int64_t block = (block_submit++) % threads;
-        ctx->block = block;
-        ring[block] = ctx;
-        boost::asio::post(*pool, *ctx);
+        assert(c->state == st_alloc);
+        c->state = st_full;
+        c->block = block_submit++;
+        ring[c->block%threads] = c;
+        boost::asio::post(*pool, *c);
     }
 
     void close() {
@@ -235,7 +234,7 @@ void Context::operator()() {
     {
         Locker m(hasher->lock, hasher->signal);
         if (hasher->closed) return;
-        assert(state == st_filled);
+        assert(state == st_full);
         state = st_hashing;
     }
     hashblock(hash, data, size);
