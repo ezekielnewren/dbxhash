@@ -99,7 +99,7 @@ struct Hasher {
 
     bool closed;
     bool eof;
-    byte hash[32];
+    byte hashOverall[32];
     Context** ring;
 
     SHA256_CTX sha256;
@@ -154,7 +154,8 @@ struct Hasher {
                 // get context
                 Context* c = ring[(block_complete+i)%threads];
                 assert(block_complete == c->block);
-                cout << c->block << " " << hexify(c->hash) << endl;
+                cout << c->block+1 << " " << hexify(c->hash) << " 0x" << std::hex << (uint64_t) c->hash << endl;
+//                cout << c->block << " " << hexify(c->hash) << endl;
 
                 // consume hashes
                 SHA256_Update(&sha256, c->hash, sizeof(c->hash));
@@ -170,7 +171,7 @@ struct Hasher {
         Locker m(lock, signal);
         eof = true;
         while (!(block_complete == block_submit)) m.wait();
-        SHA256_Final(hash, &sha256);
+        SHA256_Final(hashOverall, &sha256);
     }
 
     static int BLOCK_SIZE;
@@ -223,7 +224,7 @@ void Context::operator()() {
         state = st_hashing;
     }
     hashblock(hash, data, size);
-//    cout << block+1 << " " << hexify(hash) << endl;
+    cout << block+1 << " " << hexify(hash) << " 0x" << std::hex << (uint64_t) hash << endl;
     {
         Locker m(hasher->lock, hasher->signal);
         assert(state == st_hashing);
@@ -257,7 +258,7 @@ int main(int argc, char** argv) {
         h.submit(c);
     }
     h.finish();
-    cout << hexify(h.hash) << endl;
+    cout << hexify(h.hashOverall) << endl;
 
     file.close();
 
