@@ -54,10 +54,34 @@ struct Context {
 
 };
 
+struct Locker {
+
+    shared_ptr<boost::mutex> lock;
+    shared_ptr<boost::condition_variable> signal;
+    boost::unique_lock<boost::mutex>* lockGuard;
+
+    Locker(shared_ptr<boost::mutex> _lock, shared_ptr<boost::condition_variable> _signal) {
+        this->lock = _lock;
+        this->signal = _signal;
+        this->lockGuard = new boost::unique_lock<boost::mutex>(*lock);
+    }
+
+    ~Locker() {
+        this->signal->notify_all();
+        delete this->lockGuard; lockGuard = nullptr;
+    }
+
+    void wait() {
+        this->signal->notify_all();
+        this->signal->wait(*this->lockGuard);
+    }
+
+
+};
+
 struct Hasher {
     shared_ptr<boost::mutex> lock;
-    boost::condition_variable cond_worker;
-    boost::condition_variable cond_customer;
+    shared_ptr<boost::condition_variable> signal;
 
     Context** ctx;
     uint32_t threads;
@@ -102,36 +126,43 @@ struct Hasher {
     void run() {
         while (true) {
             int count = 0;
+            int64_t block = -1;
             {
-                boost::unique_lock<boost::mutex> m(*lock);
+                Locker m(lock, signal);
                 if (closed or (eof and block_complete == block_submit))
                     break;
-                cond_worker.wait(m);
+                m.wait();
                 if (closed or (eof and block_complete == block_submit))
                     break;
 
-                for (int i=0; i<threads; i++) {
-                    if (ring[(block_complete + i) % threads] < 0) break;
-                    count++;
+                while (true) {
+                    for (int i=0; i<threads; i++) {
+                        if (ring[(block_complete + i) % threads] < 0) break;
+                        count++;
+                    }
+                    if (count > 0) break;
+                    m.wait();
                 }
                 assert(count > 0);
+                block = block_complete;
             }
 
             for (int i=0; i<count; i++) {
-                Context* c = ctx[ring[(block_complete + i) % threads]];
+                Context* c = ctx[ring[(block+i)%threads]];
+                assert((block+i)%threads == c->block);
+                cout << c->block << " " << hexify(c->hash) << endl;
                 SHA256_Update(&sha256, c->hash, sizeof(c->hash));
             }
 
             {
-                boost::unique_lock<boost::mutex> m(*lock);
+                Locker m(lock, signal);
                 for (int i=0; i<count; i++) {
-                    Context* c = ctx[ring[(block_complete + i) % threads]];
+                    Context* c = ctx[ring[(block+i)%threads]];
                     c->state = 0;
-                    ring[(block_complete + i) % threads] = -1;
+                    ring[(block+i)%threads] = -1;
                 }
 
                 block_complete += count;
-                cond_customer.notify_one();
             }
 
 
@@ -139,11 +170,9 @@ struct Hasher {
     }
 
     void finish() {
-        boost::unique_lock<boost::mutex> m(*lock);
+        Locker m(lock, signal);
         eof = true;
-        while (block_complete < block_submit) {
-            cond_customer.wait(m);
-        }
+        while (!(block_complete == block_submit)) m.wait();
         SHA256_Final(hash, &sha256);
     }
 
@@ -157,18 +186,18 @@ struct Hasher {
     }
 
     Context* next() {
-        boost::unique_lock<boost::mutex> m(*lock);
+        Locker m(lock, signal);
         int id;
         while (true) {
             id = inState(0);
             if (id >= 0) break;
-            cond_customer.wait(m);
+            m.wait();
         }
         return this->ctx[id];
     }
 
     void submit(Context* ctx) {
-        boost::unique_lock<boost::mutex> m(*lock);
+        Locker m(lock, signal);
         assert(ctx->state == 0);
         ctx->state = 1;
         int64_t block = (block_submit++) % threads;
@@ -178,8 +207,8 @@ struct Hasher {
     }
 
     void close() {
-        cond_customer.notify_one();
-        cond_worker.notify_one();
+        Locker m(lock, signal);
+        closed = true;
     }
 
 };
@@ -192,7 +221,7 @@ Context::Context(Hasher* _hasher, int _id) {
 
 void Context::operator()() {
     {
-        boost::unique_lock<boost::mutex> m(*hasher->lock);
+        Locker m(hasher->lock, hasher->signal);
         if (hasher->closed) return;
         assert(state == 1);
         state = 2;
@@ -200,12 +229,10 @@ void Context::operator()() {
     hashblock(hash, data, size);
     cout << block+1 << " " << hexify(hash) << endl;
     {
-        boost::unique_lock<boost::mutex> m(*hasher->lock);
+        Locker m(hasher->lock, hasher->signal);
         if (hasher->closed) return;
         state = 3;
         hasher->ring[block] = id;
-        hasher->cond_customer.notify_one();
-        if (hasher->block_complete == this->block) hasher->cond_worker.notify_one();
     }
 }
 
