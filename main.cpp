@@ -42,20 +42,14 @@ struct Hasher;
 struct Context {
     Hasher* hasher;
     int id;
-    int job;
-    shared_ptr<boost::mutex> lock;
+    int block;
     int state = 0; // 0 IDLE, 1 FILLED, 2 HASHING, 3 HASHED
 
-    byte block[4*1024*1024];
+    byte data[4 * 1024 * 1024];
     byte hash[32];
     std::streamsize size;
 
     Context(Hasher* _hasher, int _id);
-
-//    void start() {
-//        t = shared_ptr<boost::thread>(new boost::thread(&Context::run, this));
-//    }
-
     void operator()();
 
 };
@@ -67,8 +61,8 @@ struct Hasher {
 
     Context** ctx;
     uint32_t threads;
-    int64_t job_submit;
-    int64_t job_complete;
+    int64_t block_submit;
+    int64_t block_complete;
 
     shared_ptr<boost::asio::thread_pool> pool;
 
@@ -85,7 +79,7 @@ struct Hasher {
 
         closed = false;
         eof = false;
-        job_complete = job_submit = 0;
+        block_complete = block_submit = 0;
 
 
         this->threads = _threads;
@@ -110,31 +104,33 @@ struct Hasher {
             int count = 0;
             {
                 boost::unique_lock<boost::mutex> m(*lock);
-                if (closed or (eof and job_complete == job_submit)) break;
+                if (closed or (eof and block_complete == block_submit))
+                    break;
                 cond_worker.wait(m);
-                if (closed or (eof and job_complete == job_submit)) break;
+                if (closed or (eof and block_complete == block_submit))
+                    break;
 
                 for (int i=0; i<threads; i++) {
-                    if (ring[(job_complete+i)%threads] < 0) break;
+                    if (ring[(block_complete + i) % threads] < 0) break;
                     count++;
                 }
                 assert(count > 0);
             }
 
             for (int i=0; i<count; i++) {
-                Context* c = ctx[ring[(job_complete+i)%threads]];
+                Context* c = ctx[ring[(block_complete + i) % threads]];
                 SHA256_Update(&sha256, c->hash, sizeof(c->hash));
             }
 
             {
                 boost::unique_lock<boost::mutex> m(*lock);
                 for (int i=0; i<count; i++) {
-                    Context* c = ctx[ring[(job_complete+i)%threads]];
+                    Context* c = ctx[ring[(block_complete + i) % threads]];
                     c->state = 0;
-                    ring[(job_complete+i)%threads] = -1;
+                    ring[(block_complete + i) % threads] = -1;
                 }
 
-                job_complete += count;
+                block_complete += count;
                 cond_customer.notify_one();
             }
 
@@ -145,7 +141,7 @@ struct Hasher {
     void finish() {
         boost::unique_lock<boost::mutex> m(*lock);
         eof = true;
-        while (job_complete < job_submit) {
+        while (block_complete < block_submit) {
             cond_customer.wait(m);
         }
         SHA256_Final(hash, &sha256);
@@ -175,18 +171,15 @@ struct Hasher {
         boost::unique_lock<boost::mutex> m(*lock);
         assert(ctx->state == 0);
         ctx->state = 1;
-        int64_t job = (job_submit++)%threads;
-        ctx->job = job;
-        ring[job] = -1;
+        int64_t block = (block_submit++) % threads;
+        ctx->block = block;
+        ring[block] = -1;
         boost::asio::post(*pool, *ctx);
     }
 
     void close() {
         cond_customer.notify_one();
         cond_worker.notify_one();
-//        for (int i=0; i<threads; i++) {
-//            this->ctx[i]->more_work.notify_one();
-//        }
     }
 
 };
@@ -195,24 +188,24 @@ int Hasher::BLOCK_SIZE = 4*1024*1024;
 Context::Context(Hasher* _hasher, int _id) {
     this->hasher = _hasher;
     this->id = _id;
-    this->lock = hasher->lock;
 }
 
 void Context::operator()() {
     {
-        boost::unique_lock<boost::mutex> m(*lock);
+        boost::unique_lock<boost::mutex> m(*hasher->lock);
         if (hasher->closed) return;
         assert(state == 1);
         state = 2;
     }
-    hashblock(hash, block, size);
+    hashblock(hash, data, size);
+    cout << block+1 << " " << hexify(hash) << endl;
     {
-        boost::unique_lock<boost::mutex> m(*lock);
+        boost::unique_lock<boost::mutex> m(*hasher->lock);
         if (hasher->closed) return;
         state = 3;
-        hasher->ring[job] = id;
+        hasher->ring[block] = id;
         hasher->cond_customer.notify_one();
-        if (hasher->job_complete == this->job) hasher->cond_worker.notify_one();
+        if (hasher->block_complete == this->block) hasher->cond_worker.notify_one();
     }
 }
 
@@ -235,7 +228,7 @@ int main(int argc, char** argv) {
     }
     while (true) {
         Context* ctx = h.next();
-        ctx->size = file.readsome((char*) ctx->block, Hasher::BLOCK_SIZE);
+        ctx->size = file.readsome((char*) ctx->data, Hasher::BLOCK_SIZE);
         if (ctx->size == 0) break;
         h.submit(ctx);
     }
