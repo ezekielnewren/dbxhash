@@ -251,11 +251,6 @@ void po_keyless(po::basic_parsed_options<char>& opts, std::vector<string>& keyle
 }
 
 int main(int argc, char** argv) {
-    if (argc <= 1) {
-        cout << "not enough arguments" << endl;
-        return 1;
-    }
-
     po::options_description desc("Allowed options");
     desc.add_options()
             ("help", "produce help message")
@@ -294,25 +289,26 @@ int main(int argc, char** argv) {
         string arg_threads = vm["threads"].as<string>();
         if (arg_threads == "full") threads = all;
         else if (arg_threads == "half") threads = all/2;
-        else threads = std::min(std::max(vm["threads"].as<int>(), 1), all);
+        else {
+            int amount = boost::lexical_cast<int>(arg_threads);
+            threads = std::min(std::max(amount, 1), all);
+        }
     }
 
 
     byte hash[DIGEST_SIZE];
 
     if (read_from_stdin) {
-        Hasher h(threads);
-        h.process(std::cin, hash);
+        Hasher(threads).process(std::cin, hash);
         cout << hexify(hash) << "  -" << endl;
     } else {
         for (string& path: keyless) {
-            Hasher h(threads);
-            fs::ifstream file((fs::path(argv[1])));
+            fs::ifstream file((fs::path(path)));
             if (! file.is_open()) {
                 cerr << "failed to open file" << endl;
                 return 2;
             }
-            h.process(file, hash);
+            Hasher(threads).process(file, hash);
             cout << hexify(hash) << "  " << path << endl;
             file.close();
         }
