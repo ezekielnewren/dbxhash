@@ -176,7 +176,7 @@ struct Hasher {
 
         c->state = st_full;
         c->block = block_submit++;
-        window[c->block%threads] = c;
+        // window[c->block%threads] = c;
 
         boost::asio::post(*pool, boost::bind(&Context::operator(), c));
 //        boost::asio::post(*pool, *c);
@@ -184,16 +184,19 @@ struct Hasher {
 
     void hashmore() {
         for (int i=0; i<threads; i++) {
-            int64_t a = block_complete+i;
+            int64_t a = block_complete;
             Context* c = window[a%threads];
+            if (c == nullptr)
+                break;
             int64_t b = c->block;
             assert(a == b);
-            if (!(block_complete == c->block and c->state == st_hashed)) break;
-            cout << c->block+1 << " " << hexify(c->hash) << " 0x" << std::hex << (uint64_t) c->hash << endl;
+//            if (!(block_complete == c->block and c->state == st_hashed)) break;
+//            cout << c->block+1 << " " << hexify(c->hash) << " 0x" << std::hex << (uint64_t) c->hash << endl;
             // cout << c->block+1 << " " << hexify(c->hash) << endl;
             SHA256_Update(&sha256, c->hash, DIGEST_SIZE);
             block_complete++;
             c->state = st_free;
+            window[a%threads] = nullptr;
         }
     }
 
@@ -216,13 +219,15 @@ void Context::operator()() {
         state = st_hashing;
     }
     hashblock(hash, data, size);
-//    cout << block+1 << " " << hexify(hash) << " 0x" << std::hex << (uint64_t) hash << endl;
+    cout << block+1 << " " << hexify(hash) << " 0x" << std::hex << (uint64_t) hash << endl;
     {
         Locker m(hasher->lock, hasher->signal);
         assert(state == st_hashing);
         state = st_hashed;
+        hasher->window[block%hasher->threads] = this;
 
-        hasher->hashmore();
+        if (hasher->block_complete == block)
+            hasher->hashmore();
     }
 }
 
@@ -236,7 +241,7 @@ int main(int argc, char** argv) {
     }
 
     uint32_t threads = boost::thread::hardware_concurrency();
-    threads = 1;
+    // threads = 1;
     Hasher h(threads);
     byte hash[DIGEST_SIZE];
 
