@@ -14,6 +14,8 @@ using std::cerr;
 using std::endl;
 using std::string;
 
+//#include <boost/shared_array.hpp>
+//using boost::shared_array;
 using boost::shared_ptr;
 namespace fs = boost::filesystem;
 typedef uint8_t byte;
@@ -49,6 +51,10 @@ enum st {
 
 
 struct Context {
+
+    Context(const Context&) = delete;
+    void operator=(const Context&) = delete;
+
     Hasher* hasher;
     int64_t block;
     int state = 0;
@@ -90,6 +96,10 @@ struct Locker {
 };
 
 struct Hasher {
+
+    Hasher(const Hasher&) = delete;
+    void operator=(const Hasher&) = delete;
+
     shared_ptr<boost::mutex> lock;
     shared_ptr<boost::condition_variable> signal;
 
@@ -151,24 +161,25 @@ struct Hasher {
         return nullptr;
     }
 
-    Context* findFree(const Locker& m) {
-        while (true) {
-            Context* c = findContext(st_free);
-            if (c != nullptr) return c;
-            m.wait();
-        }
-    }
-
     void submit(byte* buffer, int64_t len) {
         // int64_t off = 0;
         Locker m(lock, signal);
-        Context* c = findFree(m);
+        Context* c;
+        while (true) {
+            c = findContext(st_free);
+            if (c != nullptr) break;
+            m.wait();
+        }
         assert(c->state == st_free);
         memcpy(c->data, buffer, len);
+        c->size = len;
+
         c->state = st_full;
         c->block = block_submit++;
         window[c->block%threads] = c;
-        boost::asio::post(*pool, boost::bind(&Context::operator(), *c));
+
+        boost::asio::post(*pool, boost::bind(&Context::operator(), c));
+//        boost::asio::post(*pool, *c);
     }
 
     void close() {
@@ -202,7 +213,10 @@ void Context::operator()() {
             int64_t b = c->block;
             assert(a == b);
             if (hasher->block_complete == c->block and c->state == st_hashed) {
-
+//                cout << c->block+1 << " " << hexify(c->hash) << endl;
+                SHA256_Update(&hasher->sha256, c->data, c->size);
+                hasher->block_complete++;
+                c->state = st_free;
             }
         }
 
@@ -223,6 +237,7 @@ int main(int argc, char** argv) {
     uint32_t threads = boost::thread::hardware_concurrency();
     threads = 1;
     Hasher h(threads);
+    byte hash[DIGEST_SIZE];
 
     fs::ifstream file((fs::path(argv[1])));
     if (! file.is_open()) {
@@ -233,6 +248,8 @@ int main(int argc, char** argv) {
     while (true) {
         int64_t read = file.readsome((char*) buffer, BLOCK_SIZE);
         if (read == 0) break;
+        hashblock(hash, buffer, read);
+        // cout << "main " << hexify(hash) << endl;
         h.submit(buffer, read);
     }
     h.finish();
