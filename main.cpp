@@ -164,7 +164,7 @@ struct Hasher {
         boost::asio::post(*pool, boost::bind(&Context::operator(), c));
     }
 
-    void submit(byte* buffer, int64_t len) {
+    void update(byte* buffer, int64_t len) {
         int64_t off = 0;
         if (len == 0) return;
         Locker m(lock, signal);
@@ -197,7 +197,7 @@ struct Hasher {
         while (true) {
             int64_t read = in.readsome((char*) buffer.get(), bufferSize);
             if (read == 0) break;
-            submit(buffer.get(), read);
+            update(buffer.get(), read);
         }
         finish(hash);
     }
