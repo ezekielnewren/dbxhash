@@ -196,8 +196,8 @@ struct Hasher {
         shared_ptr<byte> buffer((byte*) malloc(bufferSize), free);
         while (true) {
             in.clear();
-            if (!in.read((char*) buffer.get(), bufferSize)) {
-                cerr << "error reading the file" << endl;
+            if (!in.read((char*) buffer.get(), bufferSize) and !in.eof()) {
+                cerr << std::hex << in.fail() << " error reading the file" << endl;
             }
             int64_t read = in.gcount();
             if (read == 0) break;
