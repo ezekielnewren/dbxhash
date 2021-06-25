@@ -195,7 +195,11 @@ struct Hasher {
         int64_t bufferSize = BLOCK_SIZE;
         shared_ptr<byte> buffer((byte*) malloc(bufferSize), free);
         while (true) {
-            int64_t read = in.readsome((char*) buffer.get(), bufferSize);
+            in.clear();
+            if (!in.read((char*) buffer.get(), bufferSize)) {
+                cerr << "error reading the file" << endl;
+            }
+            int64_t read = in.gcount();
             if (read == 0) break;
             update(buffer.get(), read);
         }
@@ -281,13 +285,14 @@ int main(int argc, char** argv) {
         cerr << "reading from stdin must be the only file argument if it is present" << endl;
         return 1;
     }
+    if (keyless.empty()) read_from_stdin = true;
 
     // number of threads to use
     int all = (int) boost::thread::hardware_concurrency();
     int threads = all;
     if (vm.count("threads")) {
         string arg_threads = vm["threads"].as<string>();
-        if (arg_threads == "full") threads = all;
+        if (arg_threads == "all") threads = all;
         else if (arg_threads == "half") threads = all/2;
         else {
             int amount = boost::lexical_cast<int>(arg_threads);
