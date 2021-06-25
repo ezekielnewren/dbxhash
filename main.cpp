@@ -19,8 +19,8 @@ namespace fs = boost::filesystem;
 typedef uint8_t byte;
 
 
-static const int BLOCK_SIZE = 4*1024*1024;
-static const int DIGEST_SIZE = 32;
+static const int64_t BLOCK_SIZE = 4*1024*1024;
+static const int64_t DIGEST_SIZE = 32;
 
 string hexify(byte* hash) {
     string x = boost::algorithm::hex(string((const char*) hash, DIGEST_SIZE));
@@ -40,6 +40,7 @@ struct Hasher;
 
 enum st {
     st_free,
+    st_partial,
     st_full,
     st_hashing,
     st_hashed,
@@ -108,6 +109,7 @@ struct Hasher {
 
     Context** memory;
     Context** window;
+    Context* partial;
 
     byte hashOverall[DIGEST_SIZE];
     SHA256_CTX sha256;
@@ -123,6 +125,7 @@ struct Hasher {
         pool = shared_ptr<boost::asio::thread_pool>(new boost::asio::thread_pool(threads));
         memory = new Context*[threads];
         window = new Context*[threads];
+        partial = nullptr;
         for (int i=0; i<threads; i++) {
             memory[i] = new Context(this);
             window[i] = nullptr;
@@ -141,6 +144,7 @@ struct Hasher {
 
     void finish() {
         Locker m(lock, signal);
+        if (partial != nullptr) submit(partial);
         while (block_complete < block_submit) m.wait();
         SHA256_Final(hashOverall, &sha256);
     }
@@ -152,22 +156,39 @@ struct Hasher {
         return nullptr;
     }
 
-    void submit(byte* buffer, int64_t len) {
-        // int64_t off = 0;
-        Locker m(lock, signal);
-        Context* c;
-        while (true) {
-            c = findContext(st_free);
-            if (c != nullptr) break;
-            m.wait();
-        }
-        assert(c->state == st_free);
-        memcpy(c->data, buffer, c->size=len);
-
+    void submit(Context* c) {
+        assert(c->state == st_partial);
         c->state = st_full;
         c->block = block_submit++;
-
+        partial = nullptr;
         boost::asio::post(*pool, boost::bind(&Context::operator(), c));
+    }
+
+    void submit(byte* buffer, int64_t len) {
+        int64_t off = 0;
+        if (len == 0) return;
+        Locker m(lock, signal);
+        while (true) {
+            Context* c;
+            if (partial != nullptr) c = partial;
+            else {
+                while (true) {
+                    c = findContext(st_free);
+                    if (c != nullptr) break;
+                    m.wait();
+                }
+                assert(c->state == st_free);
+                c->state = st_partial;
+            }
+            int64_t amount = std::min(BLOCK_SIZE-c->size, std::min(BLOCK_SIZE, len));
+            memcpy(c->data+c->size, buffer+off, amount);
+            c->size += amount; off += amount; len -= amount;
+
+            if (c->size == BLOCK_SIZE) submit(c);
+            else partial = c;
+            assert(len >= 0);
+            if (len == 0) break;
+        }
     }
 };
 
@@ -198,6 +219,7 @@ void Context::operator()() {
             assert(a == b);
             SHA256_Update(&hasher->sha256, c->hash, DIGEST_SIZE);
             hasher->block_complete++;
+            c->size = 0;
             c->state = st_free;
             hasher->window[a%hasher->threads] = nullptr;
         }
@@ -214,18 +236,18 @@ int main(int argc, char** argv) {
     uint32_t threads = boost::thread::hardware_concurrency();
     // threads = 1;
     Hasher h(threads);
-    byte hash[DIGEST_SIZE];
+    // byte hash[DIGEST_SIZE];
 
     fs::ifstream file((fs::path(argv[1])));
     if (! file.is_open()) {
         cerr << "failed to open file" << endl;
         return 2;
     }
-    byte buffer[BLOCK_SIZE];
+    byte buffer[BLOCK_SIZE/2-10];
     while (true) {
-        int64_t read = file.readsome((char*) buffer, BLOCK_SIZE);
+        int64_t read = file.readsome((char*) buffer, sizeof(buffer));
         if (read == 0) break;
-        hashblock(hash, buffer, read);
+        // hashblock(hash, buffer, read);
         // cout << "main " << hexify(hash) << endl;
         h.submit(buffer, read);
     }
