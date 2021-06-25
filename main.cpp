@@ -6,6 +6,7 @@
 #include <boost/filesystem.hpp>
 #include <boost/thread.hpp>
 #include <boost/asio.hpp>
+#include <boost/program_options.hpp>
 
 #include <openssl/sha.h>
 
@@ -111,7 +112,6 @@ struct Hasher {
     Context** window;
     Context* partial;
 
-    byte hashOverall[DIGEST_SIZE];
     SHA256_CTX sha256;
 
     Hasher(uint32_t _threads) {
@@ -142,11 +142,11 @@ struct Hasher {
         delete[] window; window = nullptr;
     }
 
-    void finish() {
+    void finish(byte* hash) {
         Locker m(lock, signal);
         if (partial != nullptr) submit(partial);
         while (block_complete < block_submit) m.wait();
-        SHA256_Final(hashOverall, &sha256);
+        SHA256_Final(hash, &sha256);
     }
 
     Context* findContext(int state) {
@@ -226,6 +226,17 @@ void Context::operator()() {
     }
 }
 
+namespace po = boost::program_options;
+void po_keyless(po::basic_parsed_options<char>& opts, std::vector<string>& keyless) {
+    for (int j=0; j<opts.options.size(); j++) {
+        po::basic_option<char> a = opts.options.at(j);
+        if (a.string_key == "") {
+            for (int i=0; i<a.value.size(); i++) {
+                keyless.push_back(a.value[i]);
+            }
+        }
+    }
+}
 
 int main(int argc, char** argv) {
     if (argc <= 1) {
@@ -233,29 +244,68 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    uint32_t threads = boost::thread::hardware_concurrency();
-    threads = 1;
-    Hasher h(threads);
-    // byte hash[DIGEST_SIZE];
+    po::options_description desc("Allowed options");
+    desc.add_options()
+            ("help", "produce help message")
+            ("threads", po::value<string>(), "'all', 'half', or specify the number of threads to use");
 
-    fs::ifstream file((fs::path(argv[1])));
-    if (! file.is_open()) {
-        cerr << "failed to open file" << endl;
-        return 2;
+    po::variables_map vm;
+    po::basic_parsed_options<char> x = po::parse_command_line(argc, argv, desc);
+    po::store(x, vm);
+    po::notify(vm);
+
+    std::vector<string> keyless;
+    po_keyless(x, keyless);
+
+    if (vm.count("help")) {
+        cout << desc << endl;
+        return 0;
     }
+
+    // file list
+    bool read_from_stdin = false;
+    for (auto& v : keyless) {
+        if (v == "-") {
+            read_from_stdin = true;
+            break;
+        }
+    }
+    if (read_from_stdin and keyless.size() > 1) {
+        cerr << "reading from stdin must be the only file argument if it is present" << endl;
+        return 1;
+    }
+
+    // number of threads to use
+    int all = (int) boost::thread::hardware_concurrency();
+    int threads = all;
+    if (vm.count("threads")) {
+        string arg_threads = vm["threads"].as<string>();
+        if (arg_threads == "full") threads = all;
+        else if (arg_threads == "half") threads = all/2;
+        else threads = std::min(std::max(vm["threads"].as<int>(), 1), all);
+    }
+    Hasher h(threads);
+
     int64_t memory = BLOCK_SIZE*3;
     shared_ptr<byte> buffer((byte*) malloc(memory), free);
-    while (true) {
-        int64_t read = file.readsome((char*) buffer.get(), memory);
-        if (read == 0) break;
-        // hashblock(hash, buffer, read);
-        // cout << "main " << hexify(hash) << endl;
-        h.submit(buffer.get(), read);
-    }
-    h.finish();
-    cout << hexify(h.hashOverall) << endl;
+    byte hash[DIGEST_SIZE];
 
-    file.close();
+    for (string& path: keyless) {
+        fs::ifstream file((fs::path(argv[1])));
+        if (! file.is_open()) {
+            cerr << "failed to open file" << endl;
+            return 2;
+        }
+        while (true) {
+            int64_t read = file.readsome((char*) buffer.get(), memory);
+            if (read == 0) break;
+            h.submit(buffer.get(), read);
+        }
+        h.finish(hash);
+        cout << hexify(hash) << "  " << path << endl;
+
+        file.close();
+    }
 
     return 0;
 }
