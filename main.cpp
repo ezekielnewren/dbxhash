@@ -182,6 +182,21 @@ struct Hasher {
 //        boost::asio::post(*pool, *c);
     }
 
+    void hashmore() {
+        for (int i=0; i<threads; i++) {
+            int64_t a = block_complete+i;
+            Context* c = window[a%threads];
+            int64_t b = c->block;
+            assert(a == b);
+            if (!(block_complete == c->block and c->state == st_hashed)) break;
+            cout << c->block+1 << " " << hexify(c->hash) << " 0x" << std::hex << (uint64_t) c->hash << endl;
+            // cout << c->block+1 << " " << hexify(c->hash) << endl;
+            SHA256_Update(&sha256, c->hash, DIGEST_SIZE);
+            block_complete++;
+            c->state = st_free;
+        }
+    }
+
     void close() {
         Locker m(lock, signal);
         closed = true;
@@ -201,27 +216,13 @@ void Context::operator()() {
         state = st_hashing;
     }
     hashblock(hash, data, size);
-    cout << block+1 << " " << hexify(hash) << " 0x" << std::hex << (uint64_t) hash << endl;
+//    cout << block+1 << " " << hexify(hash) << " 0x" << std::hex << (uint64_t) hash << endl;
     {
         Locker m(hasher->lock, hasher->signal);
         assert(state == st_hashing);
         state = st_hashed;
 
-        for (int i=0; i<hasher->threads; i++) {
-            int64_t a = hasher->block_complete+i;
-            Context* c = hasher->window[a%hasher->threads];
-            int64_t b = c->block;
-            assert(a == b);
-            if (hasher->block_complete == c->block and c->state == st_hashed) {
-//                cout << c->block+1 << " " << hexify(c->hash) << endl;
-                SHA256_Update(&hasher->sha256, c->data, c->size);
-                hasher->block_complete++;
-                c->state = st_free;
-            }
-        }
-
-
-
+        hasher->hashmore();
     }
 }
 
