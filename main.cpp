@@ -190,6 +190,18 @@ struct Hasher {
             if (len == 0) break;
         }
     }
+
+    void process(std::istream& in, byte* hash) {
+        int64_t bufferSize = BLOCK_SIZE;
+        shared_ptr<byte> buffer((byte*) malloc(bufferSize), free);
+        while (true) {
+            int64_t read = in.readsome((char*) buffer.get(), bufferSize);
+            if (read == 0) break;
+            submit(buffer.get(), read);
+        }
+        finish(hash);
+    }
+
 };
 
 
@@ -284,27 +296,26 @@ int main(int argc, char** argv) {
         else if (arg_threads == "half") threads = all/2;
         else threads = std::min(std::max(vm["threads"].as<int>(), 1), all);
     }
-    Hasher h(threads);
 
-    int64_t memory = BLOCK_SIZE*3;
-    shared_ptr<byte> buffer((byte*) malloc(memory), free);
+
     byte hash[DIGEST_SIZE];
 
-    for (string& path: keyless) {
-        fs::ifstream file((fs::path(argv[1])));
-        if (! file.is_open()) {
-            cerr << "failed to open file" << endl;
-            return 2;
+    if (read_from_stdin) {
+        Hasher h(threads);
+        h.process(std::cin, hash);
+        cout << hexify(hash) << "  -" << endl;
+    } else {
+        for (string& path: keyless) {
+            Hasher h(threads);
+            fs::ifstream file((fs::path(argv[1])));
+            if (! file.is_open()) {
+                cerr << "failed to open file" << endl;
+                return 2;
+            }
+            h.process(file, hash);
+            cout << hexify(hash) << "  " << path << endl;
+            file.close();
         }
-        while (true) {
-            int64_t read = file.readsome((char*) buffer.get(), memory);
-            if (read == 0) break;
-            h.submit(buffer.get(), read);
-        }
-        h.finish(hash);
-        cout << hexify(hash) << "  " << path << endl;
-
-        file.close();
     }
 
     return 0;
