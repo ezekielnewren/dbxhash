@@ -234,7 +234,7 @@ int main(int argc, char** argv) {
     }
 
     uint32_t threads = boost::thread::hardware_concurrency();
-    // threads = 1;
+    threads = 1;
     Hasher h(threads);
     // byte hash[DIGEST_SIZE];
 
@@ -243,13 +243,14 @@ int main(int argc, char** argv) {
         cerr << "failed to open file" << endl;
         return 2;
     }
-    byte buffer[BLOCK_SIZE/2-10];
+    int64_t memory = BLOCK_SIZE*3;
+    shared_ptr<byte> buffer((byte*) malloc(memory), free);
     while (true) {
-        int64_t read = file.readsome((char*) buffer, sizeof(buffer));
+        int64_t read = file.readsome((char*) buffer.get(), memory);
         if (read == 0) break;
         // hashblock(hash, buffer, read);
         // cout << "main " << hexify(hash) << endl;
-        h.submit(buffer, read);
+        h.submit(buffer.get(), read);
     }
     h.finish();
     cout << hexify(h.hashOverall) << endl;
