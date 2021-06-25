@@ -18,8 +18,12 @@ using boost::shared_ptr;
 namespace fs = boost::filesystem;
 typedef uint8_t byte;
 
+
+static const int BLOCK_SIZE = 4*1024*1024;
+static const int DIGEST_SIZE = 32;
+
 string hexify(byte* hash) {
-    string x = boost::algorithm::hex(string((const char*) hash, 32));
+    string x = boost::algorithm::hex(string((const char*) hash, DIGEST_SIZE));
     transform(x.begin(), x.end(), x.begin(), ::tolower);
     return x;
 }
@@ -50,7 +54,7 @@ struct Context {
     int state = 0;
 
     byte data[4 * 1024 * 1024];
-    byte hash[32];
+    byte hash[DIGEST_SIZE];
     std::streamsize size;
 
     Context(Hasher* _hasher);
@@ -77,7 +81,7 @@ struct Locker {
         delete this->lockGuard; lockGuard = nullptr;
     }
 
-    void wait() {
+    void wait() const {
         this->signal->notify_all();
         this->signal->wait(*this->lockGuard);
     }
@@ -89,7 +93,6 @@ struct Hasher {
     shared_ptr<boost::mutex> lock;
     shared_ptr<boost::condition_variable> signal;
 
-    Context** ctx;
     uint32_t threads;
     int64_t block_submit;
     int64_t block_complete;
@@ -99,8 +102,9 @@ struct Hasher {
 
     bool closed;
     bool eof;
-    byte hashOverall[32];
-    //Context** ring;
+    byte hashOverall[DIGEST_SIZE];
+    Context** memory;
+    Context** window;
 
     SHA256_CTX sha256;
 
@@ -115,85 +119,22 @@ struct Hasher {
 
         this->threads = _threads;
         pool = shared_ptr<boost::asio::thread_pool>(new boost::asio::thread_pool(threads));
-        ctx = new Context*[threads];
-//        ring = new Context*[threads];
+        memory = new Context*[threads];
+        window = new Context*[threads];
         for (int i=0; i<threads; i++) {
-            ctx[i] = new Context(this);
-//            ring[i] = nullptr;
+            memory[i] = new Context(this);
+            window[i] = nullptr;
         }
         SHA256_Init(&sha256);
-        boost::asio::post(*pool, boost::bind(&Hasher::run, this));
     }
 
     ~Hasher() {
-        delete[] ctx; ctx = nullptr;
-//        delete[] ring; ring = nullptr;
-    }
-
-    void run() {
-        while (true) {
-            Locker m(lock, signal);
-
-            Context* work[threads];
-            int64_t count = 0;
-            for (int i=0; i<threads; i++) work[i] = nullptr;
-
-            if (closed or (eof and block_complete == block_submit)) break;
-            while (true) {
-                for (int i=0; i<threads; i++) {
-                    Context* c = ctx[i];
-                    if (c->state == st_hashed) {
-                        work[c->block - block_complete] = c;
-                        count++;
-                    }
-                }
-                if (count > 0) break;
-                if (closed or (eof and block_complete == block_submit)) break;
-                m.wait();
-                if (closed or (eof and block_complete == block_submit)) break;
-            }
-            if (closed or (eof and block_complete == block_submit)) break;
-
-            for (int i=0; i<count and work[i] != nullptr; i++) {
-                Context* c = work[i];
-                cout << c->block+1 << " " << hexify(c->hash) << " 0x" << std::hex << (uint64_t) c->hash << endl;
-
-                // consume hashes
-                SHA256_Update(&sha256, c->hash, sizeof(c->hash));
-                c->state = st_free;
-                block_complete++;
-            }
-
-//            while (true) {
-//                for (int i=0; i<threads; i++) {
-////                    Context* c = ring[(block_complete+i)%threads];
-////                    findFree(st_hashed);
-//                    if (!(c != nullptr and c->state == st_hashed)) break;
-//                    count++;
-//                }
-//                if (count > 0) break;
-//                if (closed or (eof and block_complete == block_submit)) break;
-//                m.wait();
-//                if (closed or (eof and block_complete == block_submit)) break;
-//            }
-//            if (closed or (eof and block_complete == block_submit)) break;
-//            assert(count > 0);
-//
-//            for (int i=0; i<count; i++) {
-//                // get context
-//                Context* c = ring[(block_complete+i)%threads];
-//                assert(block_complete == c->block);
-//                cout << c->block+1 << " " << hexify(c->hash) << " 0x" << std::hex << (uint64_t) c->hash << endl;
-////                cout << c->block << " " << hexify(c->hash) << endl;
-//
-//                // consume hashes
-//                SHA256_Update(&sha256, c->hash, sizeof(c->hash));
-//                c->state = st_free;
-//                ring[(c->block)%threads] = nullptr;
-//            }
-//
-//            block_complete += count;
+        for (int i=0; i<threads; i++) {
+            delete memory[i];
+            memory[i] = nullptr;
         }
+        delete[] memory; memory = nullptr;
+        delete[] window; window = nullptr;
     }
 
     void finish() {
@@ -203,34 +144,31 @@ struct Hasher {
         SHA256_Final(hashOverall, &sha256);
     }
 
-    static int BLOCK_SIZE;
-
     Context* findContext(int state) {
         for (int i=0; i<threads; i++) {
-            if (ctx[i]->state == state) return ctx[i];
+            if (memory[i]->state == state) return memory[i];
         }
         return nullptr;
     }
 
-    Context* next() {
-        Locker m(lock, signal);
-        Context* c;
+    Context* findFree(const Locker& m) {
         while (true) {
-            c = findContext(st_free);
-            if (c != nullptr) break;
+            Context* c = findContext(st_free);
+            if (c != nullptr) return c;
             m.wait();
         }
-        assert(c->state == st_free);
-        c->state = st_alloc;
-        return c;
     }
 
-    void submit(Context* c) {
+    void submit(byte* buffer, int64_t len) {
+        // int64_t off = 0;
         Locker m(lock, signal);
-        assert(c->state == st_alloc);
+        Context* c = findFree(m);
+        assert(c->state == st_free);
+        memcpy(c->data, buffer, len);
         c->state = st_full;
         c->block = block_submit++;
-        boost::asio::post(*pool, *c);
+        window[c->block%threads] = c;
+        boost::asio::post(*pool, boost::bind(&Context::operator(), *c));
     }
 
     void close() {
@@ -239,7 +177,7 @@ struct Hasher {
     }
 
 };
-int Hasher::BLOCK_SIZE = 4*1024*1024;
+
 
 Context::Context(Hasher* _hasher) {
     this->hasher = _hasher;
@@ -257,6 +195,19 @@ void Context::operator()() {
         Locker m(hasher->lock, hasher->signal);
         assert(state == st_hashing);
         state = st_hashed;
+
+        for (int i=0; i<hasher->threads; i++) {
+            int64_t a = hasher->block_complete+i;
+            Context* c = hasher->window[a%hasher->threads];
+            int64_t b = c->block;
+            assert(a == b);
+            if (hasher->block_complete == c->block and c->state == st_hashed) {
+
+            }
+        }
+
+
+
     }
 }
 
@@ -270,6 +221,7 @@ int main(int argc, char** argv) {
     }
 
     uint32_t threads = boost::thread::hardware_concurrency();
+    threads = 1;
     Hasher h(threads);
 
     fs::ifstream file((fs::path(argv[1])));
@@ -277,12 +229,11 @@ int main(int argc, char** argv) {
         cerr << "failed to open file" << endl;
         return 2;
     }
+    byte buffer[BLOCK_SIZE];
     while (true) {
-        Context* c = h.next();
-        assert(c->state == st_alloc);
-        c->size = file.readsome((char*) c->data, Hasher::BLOCK_SIZE);
-        if (c->size == 0) break;
-        h.submit(c);
+        int64_t read = file.readsome((char*) buffer, BLOCK_SIZE);
+        if (read == 0) break;
+        h.submit(buffer, read);
     }
     h.finish();
     cout << hexify(h.hashOverall) << endl;
