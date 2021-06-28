@@ -38,7 +38,7 @@ struct DBXHash {
 
     void update(byte *buffer, int64_t len);
 
-    void process(std::istream &in, byte *hash);
+    void process(std::istream &in, byte *hash, int64_t bufferSize=BLOCK_SIZE);
 };
 
 

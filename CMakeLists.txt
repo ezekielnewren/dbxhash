@@ -18,5 +18,5 @@ include_directories(${Boost_INCLUDE_DIRS})
 add_executable(dbxhash main.cpp DBXHash.cpp DBXHash.h Context.cpp Context.h util.h util.cpp)
 target_link_libraries(dbxhash ${Boost_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT} OpenSSL::SSL)
 
-add_executable(test testit.cpp DBXHash.cpp DBXHash.h Context.cpp Context.h util.h util.cpp)
-target_link_libraries(test ${Boost_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT} OpenSSL::SSL)
+add_executable(dbxhashtest testit.cpp DBXHash.cpp DBXHash.h Context.cpp Context.h util.h util.cpp)
+target_link_libraries(dbxhashtest ${Boost_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT} OpenSSL::SSL)

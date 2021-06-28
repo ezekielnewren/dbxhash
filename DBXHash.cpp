@@ -82,8 +82,7 @@ void DBXHash::update(byte* buffer, int64_t len) {
     }
 }
 
-void DBXHash::process(std::istream& in, byte* hash) {
-    int64_t bufferSize = BLOCK_SIZE;
+void DBXHash::process(std::istream& in, byte* hash, int64_t bufferSize) {
     shared_ptr<byte> buffer((byte*) malloc(bufferSize), free);
     while (true) {
         in.clear();
