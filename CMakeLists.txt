@@ -10,7 +10,7 @@ find_package(Threads REQUIRED)
 set(Boost_USE_STATIC_LIBS ON)
 set(Boost_USE_MULTITHREADED ON)
 set(Boost_USE_STATIC_RUNTIME OFF)
-find_package(Boost 1.75.0 COMPONENTS system filesystem chrono iostreams regex thread program_options unit_test_framework REQUIRED)
+find_package(Boost 1.65.0 COMPONENTS system filesystem chrono iostreams regex thread program_options unit_test_framework REQUIRED)
 
 # set(OPENSSL_USE_STATIC_LIBS TRUE)  ## doesn't work
 find_package(OpenSSL REQUIRED)
