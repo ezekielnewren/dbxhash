@@ -9,6 +9,8 @@
 #include <boost/program_options.hpp>
 
 #include <openssl/sha.h>
+// consider using this implementation
+// https://github.com/noloader/SHA-Intrinsics
 
 using std::cout;
 using std::cerr;
