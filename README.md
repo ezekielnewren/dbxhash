@@ -8,5 +8,13 @@ or
 `pv -tpreb your_file_here | dbxhash`
 
 # Build from source
-`mkdir build && cd build`  
+## Install depenencies
+### Debian
+`apt-get update && apt-get install -y cmake g++ libssl-dev openssl libboost-all-dev`  
+
+### Fedora
+`dnf update -y && dnf install -y cmake g++ boost boost-devel`  
+
+### build the source
+`mkdir build; cd build`  
 `cmake .. && make && make test`  
