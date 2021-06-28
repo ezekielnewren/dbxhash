@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.10.0)
 project(dbxhash)
+enable_testing()
 
 set(CMAKE_CXX_STANDARD 11)
 
@@ -15,8 +16,20 @@ find_package(Boost 1.75.0 COMPONENTS system filesystem chrono iostreams regex th
 find_package(OpenSSL REQUIRED)
 
 include_directories(${Boost_INCLUDE_DIRS})
-add_executable(dbxhash main.cpp DBXHash.cpp DBXHash.h Context.cpp Context.h util.h util.cpp)
-target_link_libraries(dbxhash ${Boost_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT} OpenSSL::SSL)
 
 add_executable(dbxhashtest testit.cpp DBXHash.cpp DBXHash.h Context.cpp Context.h util.h util.cpp)
 target_link_libraries(dbxhashtest ${Boost_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT} OpenSSL::SSL)
+
+set(UNIT_TEST dbxhashtest)
+add_test(NAME ${UNIT_TEST} COMMAND ${UNIT_TEST} WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+#add_custom_command(
+#    TARGET ${UNIT_TEST}
+#    COMMENT "Run tests"
+#    POST_BUILD
+#    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+#    COMMAND ${CMAKE_CTEST_COMMAND} -R "^${UNIT_TEST}$" --output-on-failures
+#)
+
+
+add_executable(dbxhash main.cpp DBXHash.cpp DBXHash.h Context.cpp Context.h util.h util.cpp)
+target_link_libraries(dbxhash ${Boost_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT} OpenSSL::SSL)
