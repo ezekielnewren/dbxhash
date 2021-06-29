@@ -1,6 +1,9 @@
 #include "DBXHash.h"
 #include "util.h"
 
+#include <boost/random.hpp>
+#include <boost/random/random_device.hpp>
+
 using std::string;
 
 #define BOOST_TEST_MAIN
@@ -8,7 +11,14 @@ using std::string;
 using namespace boost::unit_test;
 
 
+static int all = (int) boost::thread::hardware_concurrency();
 
+template <typename Func>
+void fill_buffer(Func& fun, byte* buffer, int64_t len) {
+    for (int64_t i=0; i<len; i++) {
+        buffer[i] = fun();
+    }
+}
 
 
 BOOST_AUTO_TEST_CASE(dbxhash_milky_way) {
@@ -16,7 +26,6 @@ BOOST_AUTO_TEST_CASE(dbxhash_milky_way) {
 
     byte hash[DIGEST_SIZE];
 
-    int all = (int) boost::thread::hardware_concurrency();
     DBXHash(all).process(file, hash, 8191);
 
     string guess = hexify(hash);
@@ -48,7 +57,42 @@ BOOST_AUTO_TEST_CASE(hashblock_milky_way) {
 
 }
 
+BOOST_AUTO_TEST_CASE(hash_random) {
+    byte buffer[BLOCK_SIZE];
+    byte hash_guess[DIGEST_SIZE];
+    byte hash_correct[DIGEST_SIZE];
 
+    boost::random::rand48 source;
+
+
+    int loop = 100;
+
+    SHA256_CTX sha256;
+    SHA256_Init(&sha256);
+    source.seed(0);
+    for (int j=0; j<loop; j++) {
+        fill_buffer(source, buffer, BLOCK_SIZE);
+
+        hashblock(hash_correct, buffer, BLOCK_SIZE);
+        SHA256_Update(&sha256, hash_correct, DIGEST_SIZE);
+    }
+    SHA256_Final(hash_correct, &sha256);
+
+    DBXHash h(all);
+    source.seed(0);
+    for (int j=0; j<loop; j++) {
+        fill_buffer(source, buffer, BLOCK_SIZE);
+
+        h.update(buffer, sizeof(buffer));
+    }
+    h.finish(hash_guess);
+
+    string expected = hexify(hash_correct);
+    string actual = hexify(hash_guess);
+    BOOST_CHECK(expected == actual);
+
+//    cout << hexify(hash) << endl;
+}
 
 
 
